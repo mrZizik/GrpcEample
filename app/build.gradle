@@ -1,30 +1,285 @@
 apply plugin: 'com.android.application'
+apply plugin: 'com.google.protobuf'
+apply plugin: 'me.tatarka.retrolambda'
+apply plugin: 'pl.droidsonroids.pitest'
+apply plugin: 'jacoco'
+apply plugin: "org.sonarqube"
+
+def minSdk = hasProperty('minSdk') ? minSdk : 17
 
 android {
-    compileSdkVersion 26
-    buildToolsVersion "26.0.0"
+    applicationVariants.all { variant ->
+        def applicationId = variant.applicationId
+        def adb = android.getAdbExe().toString()
+        def variantName = variant.name.capitalize()
+        def grantPermissionTask = tasks.create("create${variantName}Permissions") << {
+            println "Granting permissions"
+            "${adb} shell pm grant ${applicationId} android.permission.CAMERA".execute()
+            "${adb} shell pm grant ${applicationId} android.permission.WRITE_EXTERNAL_STORAGE".execute()
+            "${adb} shell pm grant ${applicationId} android.permission.READ_EXTERNAL_STORAGE".execute()
+        }
+    }
+    compileSdkVersion 25
+    buildToolsVersion "25.0.3"
     defaultConfig {
-        applicationId "example.grpceample"
-        minSdkVersion 24
-        targetSdkVersion 26
+        applicationId "jp.co.soramitsu.dnote"
+        minSdkVersion minSdk
+        targetSdkVersion 25
         versionCode 1
         versionName "1.0"
         testInstrumentationRunner "android.support.test.runner.AndroidJUnitRunner"
+        multiDexEnabled = true
+    }
+    lintOptions {
+        checkReleaseBuilds false
+        // Or, if you prefer, you can continue to check for errors in release builds,
+        // but continue the build even when errors are found:
+        abortOnError false
+    }
+    dataBinding {
+        enabled = true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
+        debug {
+            minifyEnabled false
+            testCoverageEnabled = true
+        }
+    }
+    packagingOptions {
+
+        exclude 'META-INF/rxjava.properties'
+    }
+    pitest {
+        targetClasses = ['jp.co.soramitsu.dnote.service.*']
+        //by default "${project.group}.*"
+        excludedClasses = ['**Factory*', '**MembersInjector*', '**DaggerServiceComponent*', '**/databinding/*.*']
+        pitestVersion = "1.2.0"
+        threads = 4
+        timeoutFactor = 30000
+        outputFormats = ['HTML']
+    }
+    testOptions {
+        unitTests.all {
+            jacoco {
+                includeNoLocationClasses = true
+            }
+        }
+        unitTests.returnDefaultValues = true
+    }
+
+}
+task jacoco(type: JacocoReport, dependsOn: ['testDebugUnitTest', 'createDebugCoverageReport']) {
+
+    reports {
+        html.enabled = true
+    }
+
+    def fileFilter = [
+            '**/R.class',
+            '**/BR.class',
+            '**/R$*.class',
+            '**/BuildConfig.*',
+            '**/Manifest*.*',
+            '**/*Test*.*',
+            'android/**/*.*',
+            'api/*.*',
+            '**/databinding/*.*',
+            '**/DaggerServiceComponent.class',
+            '**/DaggerServiceComponent$*.class',
+            '**/*InjectAdapter*.*',
+            '**/*StaticInjection*.*',
+            '**/*ModuleAdapter*.*',
+            '**/*$ViewBinder*.*',
+            '**/*_MembersInjector*.*',
+            '**/*_Factory*.*',
+
+    ]
+
+    def src = "example/grpc"
+
+    def debugTree = fileTree(dir: "${buildDir}/intermediates/classes/debug/${src}", excludes: fileFilter)
+    def mainSrc = "${project.projectDir}/src/main/java/${src}"
+
+    sourceDirectories = files([mainSrc])
+    classDirectories = files([debugTree])
+    executionData = fileTree(dir: project.buildDir, includes: [
+            'jacoco/testDebugUnitTest.exec', 'outputs/code-coverage/connected/*coverage.ec'
+    ])
+
+
+}
+
+ext {
+    supportLibVersion = '25.3.1'
+    lombokVersion = '1.16.16'
+    daggerVersion = '2.11'
+    jsr250Version = '1.0'
+    rxlifecycleVersion = '2.1.0'
+    rxbindingVersion = '2.0.0'
+    retrofitVersion = '2.3.0'
+    gsonVersion = '2.8.1'
+    grpcVersion = '1.4.0'
+    espressoVersion = '2.2.2'
+    supportTestVersion = '0.5'
+    powerMockVersion = '1.7.0'
+}
+configurations.all {
+    resolutionStrategy {
+        force "com.android.support:support-annotations:${supportLibVersion}"
+        force 'com.google.code.findbugs:jsr305:1.3.9'
+        force 'com.google.guava:guava:20.0'
+    }
+}
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.2.0'
+    }
+    plugins {
+        javalite {
+            artifact = "com.google.protobuf:protoc-gen-javalite:3.0.0"
+        }
+        grpc {
+            artifact = 'io.grpc:protoc-gen-grpc-java:1.4.0'
+        }
+    }
+    generateProtoTasks {
+        all().each { task ->
+            task.plugins {
+                javalite {}
+                grpc {
+                    // Options added to --grpc_out
+                    option 'lite'
+                    option 'generate_equals=true'
+                }
+            }
+        }
     }
 }
 
+sonarqube {
+    properties {
+        property "sonar.projectName", "dNote Android"
+        property "sonar.projectKey", "jp.co.soramitsu:dnote-android"
+        property "sonar.sourceEncoding", "UTF-8"
+        property "sonar.sources", "src/main"
+    }
+}
+
+/*
+All direct/transitive dependencies shared between your test and production APKs need to be
+excluded from the test APK! This is necessary because both APKs will contain the same classes. Not
+excluding these dependencies from your test configuration will result in an dex pre-verifier error
+at runtime. More info in this tools bug: (https://code.google.com/p/android/issues/detail?id=192497)
+*/
+configurations.compile.dependencies.each { compileDependency ->
+    println "Excluding compile dependency: ${compileDependency.getName()}"
+    configurations.androidTestCompile.dependencies.each { androidTestCompileDependency ->
+        configurations.androidTestCompile.exclude module: "${compileDependency.getName()}"
+    }
+}
 dependencies {
     compile fileTree(dir: 'libs', include: ['*.jar'])
-    androidTestCompile('com.android.support.test.espresso:espresso-core:2.2.2', {
-        exclude group: 'com.android.support', module: 'support-annotations'
-    })
-    compile 'com.android.support:appcompat-v7:26.+'
-    compile 'com.android.support.constraint:constraint-layout:1.0.2'
+
+    annotationProcessor 'com.android.databinding:compiler:2.3.0'
+    // Support Library
+    compile "com.android.support:appcompat-v7:${supportLibVersion}"
+    compile "com.android.support:support-v4:${supportLibVersion}"
+    compile "com.android.support.constraint:constraint-layout:1.0.2"
+    compile "com.android.support:recyclerview-v7:${supportLibVersion}"
+
+    // Zxing
+    compile 'com.journeyapps:zxing-android-embedded:3.5.0'
+
+    // Lombok
+    provided "org.projectlombok:lombok:${lombokVersion}"
+    annotationProcessor "org.projectlombok:lombok:${lombokVersion}"
+
+    // Dagger 2
+    compile "com.google.dagger:dagger:${daggerVersion}"
+    annotationProcessor "com.google.dagger:dagger-compiler:${daggerVersion}"
+    provided "javax.annotation:jsr250-api:${jsr250Version}"
+
+    // RxLifecycle
+    compile "com.trello.rxlifecycle2:rxlifecycle:${rxlifecycleVersion}"
+    compile "com.trello.rxlifecycle2:rxlifecycle-components:${rxlifecycleVersion}"
+
+    // RxBinding
+    compile "com.jakewharton.rxbinding2:rxbinding:${rxbindingVersion}"
+    compile "com.jakewharton.rxbinding2:rxbinding-appcompat-v7:${rxbindingVersion}"
+    compile "com.jakewharton.rxbinding2:rxbinding-support-v4:${rxbindingVersion}"
+
+    // UI
+    compile 'com.github.apl-devs:appintro:v4.2.0'
+    compile 'com.github.mukeshsolanki:android-otpview-pinview:1.0.3'
+
+    // Retrofit 2
+    compile "com.squareup.retrofit2:retrofit:${retrofitVersion}"
+    compile("com.squareup.retrofit2:converter-simplexml:${retrofitVersion}") {
+        exclude group: 'xpp3', module: 'xpp3'
+        exclude group: 'stax', module: 'stax-api'
+        exclude group: 'stax', module: 'stax'
+    }
+
+    // Gson
+    compile "com.google.code.gson:gson:${gsonVersion}"
+
+    // CirlceImageView
+    compile 'de.hdodenhof:circleimageview:2.1.0'
+
+    // PieChart lib
+    compile 'com.github.PhilJay:MPAndroidChart:v3.0.2'
+    // Circle Progress
+    compile 'com.github.rahatarmanahmed:circularprogressview:2.5.0'
+    // JUnit
     testCompile 'junit:junit:4.12'
+    // Mockito
+    testCompile 'org.mockito:mockito-core:2.8.9'
+    // PowerMock
+    testCompile "org.powermock:powermock-module-junit4:${powerMockVersion}"
+    testCompile "org.powermock:powermock-api-mockito2:${powerMockVersion}"
+    testCompile "org.powermock:powermock-module-junit4-rule:${powerMockVersion}"
+    testCompile "org.powermock:powermock-classloading-xstream:${powerMockVersion}"
+    // Robolectric
+    testCompile 'org.robolectric:robolectric:3.3.2'
+    testCompile "org.robolectric:shadows-support-v4:3.3.2"
+
+    // Espresso UI Testing dependencies.
+    androidTestCompile("com.android.support.test.espresso:espresso-contrib:${espressoVersion}", {
+        exclude group: 'com.android.support', module: 'support-annotations'
+        exclude group: 'com.android.support', module: 'appcompat'
+        exclude group: 'com.android.support', module: 'design'
+        exclude group: 'com.android.support', module: 'support-v4'
+        exclude group: 'com.android.support', module: 'recyclerview-v7'
+    })
+
+    // Espresso
+    androidTestCompile "com.android.support.test.espresso:espresso-core:${espressoVersion}"
+    androidTestCompile "com.android.support.test.espresso:espresso-intents:${espressoVersion}"
+    androidTestCompile "com.android.support.test.espresso:espresso-idling-resource:${espressoVersion}"
+    // Test runner and rules
+    androidTestCompile "com.android.support.test:runner:${supportTestVersion}"
+    androidTestCompile "com.android.support.test:rules:${supportTestVersion}"
+    androidTestCompile "com.android.support:support-annotations:${supportLibVersion}"
+
+    // gRPC
+    compile "io.grpc:grpc-okhttp:${grpcVersion}"
+    compile "io.grpc:grpc-protobuf-lite:${grpcVersion}"
+    compile "io.grpc:grpc-stub:${grpcVersion}"
+    testCompile "io.grpc:grpc-testing:${grpcVersion}"
+    // Logger
+    compile 'com.orhanobut:logger:2.1.1'
+    // Flurry analytics
+    compile 'com.flurry.android:analytics:7.0.0@aar'
+
+
+    // NTP client
+    compile 'com.github.instacart.truetime-android:library-extension-rx:3.2'
 }

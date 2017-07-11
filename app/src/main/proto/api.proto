@@ -1,0 +1,14 @@
+syntax = "proto3";
+package api;
+
+message IsUniqueUsernameRequest {
+  string username = 1;
+}
+
+message IsUniqueUsernameResponse {
+  bool is_unique = 1;
+}
+
+service PublicUserService {
+  rpc IsUniqueUsername (IsUniqueUsernameRequest) returns (IsUniqueUsernameResponse);
+}
